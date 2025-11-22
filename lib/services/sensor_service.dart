@@ -25,11 +25,12 @@ class SensorService {
   StreamSubscription? _gyroSub;
 
   // Low-pass filter alpha (0 < alpha < 1). Lower = smoother but more lag.
-  final double _alpha = 0.1;
+  // Increased to 0.25 for faster response.
+  final double _alpha = 0.25;
   vector.Vector3? _lastAcc;
 
   void startListening() {
-    _accSub = accelerometerEventStream().listen((event) {
+    _accSub = accelerometerEventStream(samplingPeriod: const Duration(milliseconds: 20)).listen((event) {
       final rawAcc = vector.Vector3(event.x, event.y, event.z);
       
       // Apply Low-Pass Filter
@@ -42,11 +43,11 @@ class SensorService {
       _accelerometerController.add(_lastAcc!);
     });
 
-    _magSub = magnetometerEventStream().listen((event) {
+    _magSub = magnetometerEventStream(samplingPeriod: const Duration(milliseconds: 20)).listen((event) {
       _magnetometerController.add(vector.Vector3(event.x, event.y, event.z));
     });
 
-    _gyroSub = gyroscopeEventStream().listen((event) {
+    _gyroSub = gyroscopeEventStream(samplingPeriod: const Duration(milliseconds: 20)).listen((event) {
       _gyroscopeController.add(vector.Vector3(event.x, event.y, event.z));
     });
   }

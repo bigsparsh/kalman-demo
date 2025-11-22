@@ -78,7 +78,7 @@ class PathManager {
     _pathEnd = center + dir * maxProj;
   }
 
-  vector.Vector2 snapPoint(vector.Vector2 point, {double threshold = 2.0}) {
+  vector.Vector2 snapPoint(vector.Vector2 point, {double threshold = 2.0, bool strict = false}) {
     if (!hasPath) return point;
 
     final start = _pathStart!;
@@ -95,12 +95,15 @@ class PathManager {
     double t = (point - start).dot(lineVec) / lineLenSq;
 
     // Clamp t to [0, 1] to stay within segment
-    // If we want to allow snapping beyond the segment (infinite line), remove clamping.
-    // But usually "corridor" implies a finite segment. Let's clamp.
     t = t.clamp(0.0, 1.0);
 
     // Closest point on line
     vector.Vector2 closest = start + lineVec * t;
+
+    // If strict snapping is enabled, always return the closest point on the line.
+    if (strict) {
+      return closest;
+    }
 
     // Check distance
     double dist = (point - closest).length;

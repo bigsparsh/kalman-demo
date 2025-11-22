@@ -27,7 +27,8 @@ class PDREngine {
 
   // Step Detection Constants
   final double _stepThreshold = 11.0; // Magnitude threshold for step
-  final int _minStepIntervalMs = 400; // Minimum time between steps
+  // Reduced from 400ms to 300ms for faster step registration
+  final int _minStepIntervalMs = 300; // Minimum time between steps
   int _lastStepTime = 0;
   bool _isStepPeak = false;
 
@@ -169,7 +170,8 @@ class PDREngine {
 
     vector.Vector2 outputPos = rawPos;
     if (_isSnapping) {
-      outputPos = _pathManager.snapPoint(rawPos);
+      // User requested strict snapping ("marker cannot leave the path area")
+      outputPos = _pathManager.snapPoint(rawPos, strict: true);
     }
 
     _positionController.add(outputPos);
