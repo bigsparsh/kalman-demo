@@ -4,6 +4,7 @@ import 'package:vector_math/vector_math_64.dart' as vector;
 import '../services/sensor_service.dart';
 
 import 'path_manager.dart';
+import 'graph_models.dart';
 
 class PDREngine {
   final SensorService _sensorService;
@@ -22,8 +23,7 @@ class PDREngine {
   bool get isRecording => _isRecording;
   bool get isSnapping => _isSnapping;
   bool get hasPath => _pathManager.hasPath;
-  vector.Vector2? get pathStart => _pathManager.pathStart;
-  vector.Vector2? get pathEnd => _pathManager.pathEnd;
+  Graph get graph => _pathManager.graph;
 
   // Step Detection Constants
   final double _stepThreshold = 11.0; // Magnitude threshold for step
@@ -31,6 +31,9 @@ class PDREngine {
   final int _minStepIntervalMs = 300; // Minimum time between steps
   int _lastStepTime = 0;
   bool _isStepPeak = false;
+  
+  Timer? _stopTimer;
+  static const Duration _stopDuration = Duration(seconds: 2);
 
   // Kalman Filter State (Simple 1D for Heading)
   double _kalmanP = 1.0; // Error covariance
@@ -73,14 +76,24 @@ class PDREngine {
   void toggleRecording() {
     _isRecording = !_isRecording;
     if (_isRecording) {
-      _pathManager.clearRecording();
-      // Also reset position? Maybe not, user might want to start recording from current pos.
-      // But usually recording a path implies defining the coordinate system.
-      // For simplicity, let's keep current position but start adding points.
+      // Start recording
+      _isSnapping = false; // Auto-disable snapping
+      
+      // Check if we are starting on an existing path (within threshold)
+      // If so, split the edge and start from there.
+      vector.Vector2 currentPos = vector.Vector2(_currentX, _currentY);
+      _pathManager.splitEdgeAtPoint(currentPos);
+      
+      if (!_pathManager.hasPath) {
+         _pathManager.clearRecording();
+      }
     } else {
-      // Stop recording, generate path
-      _pathManager.generatePath();
+      // Stop recording
+      _stopTimer?.cancel();
+      _pathManager.finalizeCurrentSegment();
       _pathStatusController.add(null);
+      
+      _isSnapping = true; // Auto-enable snapping
     }
   }
 
@@ -99,10 +112,26 @@ class PDREngine {
         _stepCount++;
         _stepController.add(_stepCount);
         _updatePosition();
+        
+        if (_isRecording) {
+           _resetStopTimer();
+        }
       }
     } else {
       _isStepPeak = false;
     }
+  }
+  
+  void _resetStopTimer() {
+    _stopTimer?.cancel();
+    _stopTimer = Timer(_stopDuration, () {
+      if (_isRecording) {
+        // User stopped moving for 2 seconds
+        _pathManager.finalizeCurrentSegment();
+        _pathStatusController.add(null);
+        // print("Path segment finalized due to stop.");
+      }
+    });
   }
 
   void _updateHeading() {
@@ -187,5 +216,9 @@ class PDREngine {
     _stepController.close();
     _headingController.close();
     _pathStatusController.close();
+  }
+
+  List<vector.Vector2> findPath(vector.Vector2 start, vector.Vector2 end) {
+    return _pathManager.findPath(start, end);
   }
 }

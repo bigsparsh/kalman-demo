@@ -1,9 +1,18 @@
 import 'dart:math';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
 import '../logic/pdr_engine.dart';
 import '../services/sensor_service.dart';
+import '../logic/graph_models.dart';
 import 'sensor_dashboard.dart';
+
+class TrailPoint {
+  final vector.Vector2 position;
+  final DateTime timestamp;
+
+  TrailPoint(this.position, this.timestamp);
+}
 
 class PositioningScreen extends StatefulWidget {
   const PositioningScreen({super.key});
@@ -14,10 +23,13 @@ class PositioningScreen extends StatefulWidget {
 
 class _PositioningScreenState extends State<PositioningScreen> {
   late PDREngine _pdrEngine;
-  final List<vector.Vector2> _path = [];
+  final List<TrailPoint> _path = [];
   vector.Vector2 _currentPosition = vector.Vector2.zero();
   double _currentHeading = 0.0;
   int _stepCount = 0;
+  Timer? _trailTimer;
+  static const Duration _trailDuration = Duration(seconds: 5);
+  static const double _jumpThreshold = 1.0; // Meters
 
   @override
   void initState() {
@@ -25,10 +37,33 @@ class _PositioningScreenState extends State<PositioningScreen> {
     _pdrEngine = PDREngine(SensorService());
     _pdrEngine.start();
 
+    // Timer to clean up old trail points
+    _trailTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
+      final now = DateTime.now();
+      setState(() {
+        _path.removeWhere((p) => now.difference(p.timestamp) > _trailDuration);
+      });
+    });
+
     _pdrEngine.positionStream.listen((pos) {
       setState(() {
+        // Check for jump
+        if (_path.isNotEmpty) {
+          final lastPos = _path.last.position;
+          if ((pos - lastPos).length > _jumpThreshold && _pdrEngine.hasPath) {
+            // Jump detected, try to find path
+            final interpolatedPath = _pdrEngine.findPath(lastPos, pos);
+            for (var p in interpolatedPath) {
+              _path.add(TrailPoint(p, DateTime.now()));
+            }
+          } else {
+            _path.add(TrailPoint(pos, DateTime.now()));
+          }
+        } else {
+          _path.add(TrailPoint(pos, DateTime.now()));
+        }
+        
         _currentPosition = pos;
-        _path.add(pos);
       });
     });
 
@@ -53,6 +88,7 @@ class _PositioningScreenState extends State<PositioningScreen> {
 
   @override
   void dispose() {
+    _trailTimer?.cancel();
     _pdrEngine.dispose();
     super.dispose();
   }
@@ -83,8 +119,7 @@ class _PositioningScreenState extends State<PositioningScreen> {
                 path: _path,
                 currentPosition: _currentPosition,
                 heading: _currentHeading,
-                definedPathStart: _pdrEngine.pathStart,
-                definedPathEnd: _pdrEngine.pathEnd,
+                graph: _pdrEngine.hasPath ? _pdrEngine.graph : null,
               ),
             ),
           ),
@@ -145,18 +180,16 @@ class _PositioningScreenState extends State<PositioningScreen> {
 }
 
 class PathPainter extends CustomPainter {
-  final List<vector.Vector2> path;
+  final List<TrailPoint> path;
   final vector.Vector2 currentPosition;
   final double heading;
-  final vector.Vector2? definedPathStart;
-  final vector.Vector2? definedPathEnd;
+  final Graph? graph;
 
   PathPainter({
     required this.path,
     required this.currentPosition,
     required this.heading,
-    this.definedPathStart,
-    this.definedPathEnd,
+    this.graph,
   });
 
   @override
@@ -170,34 +203,68 @@ class PathPainter extends CustomPainter {
     canvas.scale(scale, scale);
     canvas.translate(-currentPosition.x, -currentPosition.y);
 
-    // Draw Defined Path (if exists)
-    if (definedPathStart != null && definedPathEnd != null) {
-      final definedPathPaint = Paint()
+    // Draw Graph (if exists)
+    if (graph != null) {
+      final edgePaint = Paint()
         ..color = Colors.green.withValues(alpha: 0.5)
         ..strokeWidth = 0.3 // Thicker line
         ..strokeCap = StrokeCap.round
         ..style = PaintingStyle.stroke;
       
-      canvas.drawLine(
-        Offset(definedPathStart!.x, definedPathStart!.y),
-        Offset(definedPathEnd!.x, definedPathEnd!.y),
-        definedPathPaint,
-      );
+      final nodePaint = Paint()
+        ..color = Colors.green
+        ..style = PaintingStyle.fill;
+
+      for (var edge in graph!.edges.values) {
+        final startNode = graph!.nodes[edge.startNodeId];
+        final endNode = graph!.nodes[edge.endNodeId];
+
+        if (startNode != null && endNode != null) {
+          canvas.drawLine(
+            Offset(startNode.position.x, startNode.position.y),
+            Offset(endNode.position.x, endNode.position.y),
+            edgePaint,
+          );
+        }
+      }
+
+      for (var node in graph!.nodes.values) {
+        canvas.drawCircle(
+          Offset(node.position.x, node.position.y),
+          0.2,
+          nodePaint,
+        );
+      }
     }
 
-    // Draw Walked Path
-    final paint = Paint()
-      ..color = Colors.blue
-      ..strokeWidth = 0.1 // Relative to scale
-      ..style = PaintingStyle.stroke;
-
+    // Draw Walked Path (Fading)
     if (path.isNotEmpty) {
-      final pathObj = Path();
-      pathObj.moveTo(path.first.x, path.first.y);
-      for (var point in path) {
-        pathObj.lineTo(point.x, point.y);
+      final now = DateTime.now();
+      
+      for (int i = 0; i < path.length - 1; i++) {
+        final p1 = path[i];
+        final p2 = path[i + 1];
+        
+        // Calculate opacity based on age of p1
+        final age = now.difference(p1.timestamp).inMilliseconds;
+        final maxAge = 5000; // 5 seconds
+        double opacity = 1.0 - (age / maxAge);
+        opacity = opacity.clamp(0.0, 1.0);
+        
+        if (opacity <= 0) continue;
+
+        final segmentPaint = Paint()
+          ..color = Colors.blue.withValues(alpha: opacity)
+          ..strokeWidth = 0.1
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round;
+
+        canvas.drawLine(
+          Offset(p1.position.x, p1.position.y),
+          Offset(p2.position.x, p2.position.y),
+          segmentPaint,
+        );
       }
-      canvas.drawPath(pathObj, paint);
     }
 
     // Draw Marker (at currentPosition)
