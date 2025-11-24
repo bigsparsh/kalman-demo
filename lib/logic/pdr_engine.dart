@@ -26,11 +26,18 @@ class PDREngine {
   Graph get graph => _pathManager.graph;
 
   // Step Detection Constants
-  final double _stepThreshold = 11.0; // Magnitude threshold for step
-  // Reduced from 400ms to 300ms for faster step registration
+  final double _stepThreshold = 10.5; // Magnitude threshold for step (approx 1.07g)
   final int _minStepIntervalMs = 300; // Minimum time between steps
   int _lastStepTime = 0;
   bool _isStepPeak = false;
+  
+  // ZUPT & Peak Detection State
+  final List<double> _accBuffer = [];
+  static const int _bufferSize = 20;
+  final double _stationaryThreshold = 0.5; // Variance threshold for stationary
+  double _smoothAcc = 9.8; // Initial gravity
+  static const double _alpha = 0.1; // Smoothing factor (Low-pass filter)
+  bool _isStationary = false;
   
   Timer? _stopTimer;
   static const Duration _stopDuration = Duration(seconds: 2);
@@ -105,7 +112,27 @@ class PDREngine {
     double magnitude = acc.length;
     int now = DateTime.now().millisecondsSinceEpoch;
 
-    if (magnitude > _stepThreshold) {
+    // 1. Update Buffer for Variance (ZUPT)
+    _accBuffer.add(magnitude);
+    if (_accBuffer.length > _bufferSize) {
+      _accBuffer.removeAt(0);
+    }
+
+    // 2. Check Stationary (ZUPT)
+    if (_accBuffer.length == _bufferSize) {
+      double variance = _calculateVariance(_accBuffer);
+      _isStationary = variance < _stationaryThreshold;
+    }
+
+    if (_isStationary) {
+      return; // Do not detect steps if stationary
+    }
+
+    // 3. Smooth Acceleration (Low-pass filter)
+    _smoothAcc = _smoothAcc * (1 - _alpha) + magnitude * _alpha;
+
+    // 4. Peak Detection
+    if (_smoothAcc > _stepThreshold) {
       if (!_isStepPeak && (now - _lastStepTime) > _minStepIntervalMs) {
         _isStepPeak = true;
         _lastStepTime = now;
@@ -120,6 +147,13 @@ class PDREngine {
     } else {
       _isStepPeak = false;
     }
+  }
+
+  double _calculateVariance(List<double> values) {
+    if (values.isEmpty) return 0.0;
+    double mean = values.reduce((a, b) => a + b) / values.length;
+    double variance = values.map((v) => pow(v - mean, 2)).reduce((a, b) => a + b) / values.length;
+    return variance;
   }
   
   void _resetStopTimer() {
