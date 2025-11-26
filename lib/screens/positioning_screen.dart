@@ -1,10 +1,13 @@
-import 'dart:math';
+
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
 import '../logic/pdr_engine.dart';
 import '../services/sensor_service.dart';
-import '../logic/graph_models.dart';
+
+import '../logic/geo_utils.dart';
 import 'sensor_dashboard.dart';
 
 class TrailPoint {
@@ -30,6 +33,11 @@ class _PositioningScreenState extends State<PositioningScreen> {
   Timer? _trailTimer;
   static const Duration _trailDuration = Duration(seconds: 5);
   static const double _jumpThreshold = 1.0; // Meters
+  
+  // Map State
+  final MapController _mapController = MapController();
+  LatLng _mapCenter = GeoUtils.defaultOrigin;
+  final double _currentZoom = 18.0;
 
   @override
   void initState() {
@@ -64,6 +72,10 @@ class _PositioningScreenState extends State<PositioningScreen> {
         }
         
         _currentPosition = pos;
+        
+        // Update map center to follow user
+        // _mapCenter = GeoUtils.localToGlobal(_currentPosition, GeoUtils.defaultOrigin);
+        // _mapController.move(_mapCenter, _currentZoom);
       });
     });
 
@@ -114,13 +126,48 @@ class _PositioningScreenState extends State<PositioningScreen> {
         children: [
           // Map View
           Positioned.fill(
-            child: CustomPaint(
-              painter: PathPainter(
-                path: _path,
-                currentPosition: _currentPosition,
-                heading: _currentHeading,
-                graph: _pdrEngine.hasPath ? _pdrEngine.graph : null,
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: _mapCenter,
+                initialZoom: _currentZoom,
+                interactionOptions: const InteractionOptions(
+                  flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+                ),
               ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.example.kalman_filter',
+                ),
+                // Draw Graph (if exists)
+                if (_pdrEngine.hasPath)
+                  PolylineLayer(
+                    polylines: _buildGraphPolylines(),
+                  ),
+                // Draw Walked Path (Fading)
+                PolylineLayer(
+                  polylines: _buildTrailPolylines(),
+                ),
+                // Draw Marker (at currentPosition)
+                MarkerLayer(
+                  markers: [
+                    Marker(
+                      point: GeoUtils.localToGlobal(_currentPosition, GeoUtils.defaultOrigin),
+                      width: 20,
+                      height: 20,
+                      child: Transform.rotate(
+                        angle: _currentHeading,
+                        child: const Icon(
+                          Icons.navigation,
+                          color: Colors.red,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
           // Stats Overlay
@@ -170,6 +217,13 @@ class _PositioningScreenState extends State<PositioningScreen> {
                   icon: Icon(_pdrEngine.isSnapping ? Icons.link_off : Icons.link),
                   backgroundColor: _pdrEngine.isSnapping ? Colors.green : null,
                 ),
+                FloatingActionButton(
+                  onPressed: () {
+                    _mapCenter = GeoUtils.localToGlobal(_currentPosition, GeoUtils.defaultOrigin);
+                    _mapController.move(_mapCenter, _currentZoom);
+                  },
+                  child: const Icon(Icons.my_location),
+                ),
               ],
             ),
           ),
@@ -177,120 +231,58 @@ class _PositioningScreenState extends State<PositioningScreen> {
       ),
     );
   }
-}
 
-class PathPainter extends CustomPainter {
-  final List<TrailPoint> path;
-  final vector.Vector2 currentPosition;
-  final double heading;
-  final Graph? graph;
-
-  PathPainter({
-    required this.path,
-    required this.currentPosition,
-    required this.heading,
-    this.graph,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
+  List<Polyline> _buildGraphPolylines() {
+    List<Polyline> polylines = [];
+    final graph = _pdrEngine.graph;
     
-    // Transform canvas to keep current position at center
-    canvas.translate(center.dx, center.dy);
-    
-    double scale = 50.0;
-    canvas.scale(scale, scale);
-    canvas.translate(-currentPosition.x, -currentPosition.y);
+    for (var edge in graph.edges.values) {
+      final startNode = graph.nodes[edge.startNodeId];
+      final endNode = graph.nodes[edge.endNodeId];
 
-    // Draw Graph (if exists)
-    if (graph != null) {
-      final edgePaint = Paint()
-        ..color = Colors.green.withValues(alpha: 0.5)
-        ..strokeWidth = 0.3 // Thicker line
-        ..strokeCap = StrokeCap.round
-        ..style = PaintingStyle.stroke;
-      
-      final nodePaint = Paint()
-        ..color = Colors.green
-        ..style = PaintingStyle.fill;
-
-      for (var edge in graph!.edges.values) {
-        final startNode = graph!.nodes[edge.startNodeId];
-        final endNode = graph!.nodes[edge.endNodeId];
-
-        if (startNode != null && endNode != null) {
-          canvas.drawLine(
-            Offset(startNode.position.x, startNode.position.y),
-            Offset(endNode.position.x, endNode.position.y),
-            edgePaint,
-          );
-        }
-      }
-
-      for (var node in graph!.nodes.values) {
-        canvas.drawCircle(
-          Offset(node.position.x, node.position.y),
-          0.2,
-          nodePaint,
+      if (startNode != null && endNode != null) {
+        polylines.add(
+          Polyline(
+            points: [
+              GeoUtils.localToGlobal(startNode.position, GeoUtils.defaultOrigin),
+              GeoUtils.localToGlobal(endNode.position, GeoUtils.defaultOrigin),
+            ],
+            color: Colors.green.withValues(alpha: 0.5),
+            strokeWidth: 4.0,
+          ),
         );
       }
     }
-
-    // Draw Walked Path (Fading)
-    if (path.isNotEmpty) {
-      final now = DateTime.now();
-      
-      for (int i = 0; i < path.length - 1; i++) {
-        final p1 = path[i];
-        final p2 = path[i + 1];
-        
-        // Calculate opacity based on age of p1
-        final age = now.difference(p1.timestamp).inMilliseconds;
-        final maxAge = 5000; // 5 seconds
-        double opacity = 1.0 - (age / maxAge);
-        opacity = opacity.clamp(0.0, 1.0);
-        
-        if (opacity <= 0) continue;
-
-        final segmentPaint = Paint()
-          ..color = Colors.blue.withValues(alpha: opacity)
-          ..strokeWidth = 0.1
-          ..style = PaintingStyle.stroke
-          ..strokeCap = StrokeCap.round;
-
-        canvas.drawLine(
-          Offset(p1.position.x, p1.position.y),
-          Offset(p2.position.x, p2.position.y),
-          segmentPaint,
-        );
-      }
-    }
-
-    // Draw Marker (at currentPosition)
-    final markerPaint = Paint()
-      ..color = Colors.red
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(Offset(currentPosition.x, currentPosition.y), 0.2, markerPaint);
-
-    // Draw Heading Indicator
-    final headingPaint = Paint()
-      ..color = Colors.red
-      ..strokeWidth = 0.05
-      ..style = PaintingStyle.stroke;
-    
-    double indicatorLen = 0.5;
-    canvas.drawLine(
-      Offset(currentPosition.x, currentPosition.y),
-      Offset(
-        currentPosition.x + indicatorLen * sin(heading),
-        currentPosition.y - indicatorLen * cos(heading),
-      ),
-      headingPaint,
-    );
+    return polylines;
   }
 
-  @override
-  bool shouldRepaint(covariant PathPainter oldDelegate) => true;
+  List<Polyline> _buildTrailPolylines() {
+    List<Polyline> polylines = [];
+    final now = DateTime.now();
+    final maxAge = 5000; // 5 seconds
+
+    for (int i = 0; i < _path.length - 1; i++) {
+      final p1 = _path[i];
+      final p2 = _path[i + 1];
+
+      final age = now.difference(p1.timestamp).inMilliseconds;
+      double opacity = 1.0 - (age / maxAge);
+      opacity = opacity.clamp(0.0, 1.0);
+
+      if (opacity <= 0) continue;
+
+      polylines.add(
+        Polyline(
+          points: [
+            GeoUtils.localToGlobal(p1.position, GeoUtils.defaultOrigin),
+            GeoUtils.localToGlobal(p2.position, GeoUtils.defaultOrigin),
+          ],
+          color: Colors.blue.withValues(alpha: opacity),
+          strokeWidth: 3.0,
+        ),
+      );
+    }
+    return polylines;
+  }
 }
+

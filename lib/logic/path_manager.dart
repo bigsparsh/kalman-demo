@@ -17,14 +17,50 @@ class PathManager {
     _recordedPoints.add(point);
   }
 
-  void clearRecording() {
+  void resetRecordingSession() {
     _recordedPoints.clear();
+    // Do NOT clear the graph here. We want to persist it.
+    // _graph.clear(); 
+    _lastNode = null;
+  }
+
+  void clearGraph() {
     _graph.clear();
+    _recordedPoints.clear();
+    _lastNode = null;
+  }
+
+  bool get hasPendingPoints => _recordedPoints.isNotEmpty;
+
+  /// Prepares for a new recording session.
+  /// Checks if the current position is close to an existing graph element to branch off.
+  void prepareForNewRecording(vector.Vector2 currentPos) {
+    resetRecordingSession();
+
+    if (!hasPath) return;
+
+    // 1. Check if we are close to an existing Node
+    Node? closestNode = _findClosestNode(currentPos, threshold: 0.5);
+    if (closestNode != null) {
+      _lastNode = closestNode;
+      return;
+    }
+
+    // 2. Check if we are close to an Edge (to split it)
+    Node? splitNode = splitEdgeAtPoint(currentPos, threshold: 2.0);
+    if (splitNode != null) {
+      _lastNode = splitNode;
+      return;
+    }
+
+    // If not close to anything, we start a fresh disconnected segment (or just a new tree in the forest)
     _lastNode = null;
   }
 
   /// Finalizes the currently recorded points into a new Edge (and Nodes).
   /// Connects to the previous segment if it exists.
+  void generatePath() => finalizeCurrentSegment();
+
   void finalizeCurrentSegment() {
     if (_recordedPoints.length < 2) {
       // Not enough points to form a line.
@@ -32,7 +68,18 @@ class PathManager {
       // for the next segment or discard? 
       // For now, let's just keep them if we are continuing, but this function implies "finishing" a segment.
       // If we stop with 1 point, it's noise.
-      _recordedPoints.clear();
+      // _recordedPoints.clear(); // Don't clear, maybe we just haven't moved enough yet.
+      return;
+    }
+
+    // Check total length of the segment
+    double totalLength = 0;
+    for (int i = 0; i < _recordedPoints.length - 1; i++) {
+      totalLength += (_recordedPoints[i] - _recordedPoints[i+1]).length;
+    }
+
+    if (totalLength < 1.0) {
+      // Segment too short to be meaningful (less than 1 meter)
       return;
     }
 

@@ -1,16 +1,12 @@
-# kalman_filter
+# Indoor Navigation System
 
-A new Flutter project.
+This is an indoor navigation application, which used PDR (Person Dead Reckoning) to estimate the user's position in an indoor environment. To correct the data we use the Kalman Filter.
 
-## Getting Started
-
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+### Important Info
+- The Application is made using flutter with flutter_map.
+- There is path recording feature where user can first walk the path they want to make.
+- The path when made will be a straight line on which the map marker will snap to.
+- Whenver the marker is snapped on an existing path, and then they hit record again then a point from their exact location will be made and they will be allowed to move to the location they want to and then another path will be recorded.
+- The path are stored as vertices and edges.
+- If two paths are intersecting each other then there should be a vertex at the intersection.
+- Whenever snapped and move forward beyond the path, then stop registering the movement.
